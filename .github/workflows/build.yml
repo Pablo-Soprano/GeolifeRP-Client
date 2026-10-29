@@ -23,14 +23,57 @@ jobs:
           cd src
           ../android-ndk-r14b/ndk-build -j4
           ls -la libs/armeabi-v7a/
-      - name: Replace lib in APK and sign
+      - name: Patch APK and sign
         run: |
+          cat > patch.py <<'PY'
+          import zipfile, struct, sys
+          src, lib, out = sys.argv[1:4]
+          zin = zipfile.ZipFile(src)
+          man = bytearray(zin.read('AndroidManifest.xml'))
+          _, _, size = struct.unpack('<HHI', man[8:16])
+          sc, stc, fl, ss, sts = struct.unpack('<IIIII', man[16:36])
+          offs = struct.unpack('<%dI' % sc, man[36:36+4*sc])
+          base = 8 + ss
+          def s(o):
+              p = base + o
+              if fl & 0x100:
+                  l = man[p]; p += 1
+                  if l & 0x80: p += 1
+                  l2 = man[p]; p += 1
+                  if l2 & 0x80: l2 = ((l2 & 0x7f) << 8) | man[p]; p += 1
+                  return man[p:p+l2].decode('utf8', 'ignore')
+              l = struct.unpack('<H', man[p:p+2])[0]
+              return man[p+2:p+2+l*2].decode('utf16', 'ignore')
+          strs = [s(o) for o in offs]
+          pos = 8 + size
+          done = False
+          while pos < len(man):
+              t, hs, sz = struct.unpack('<HHI', man[pos:pos+8])
+              if t == 0x102 and strs[struct.unpack('<i', man[pos+20:pos+24])[0]] == 'uses-sdk':
+                  ac = struct.unpack('<H', man[pos+28:pos+30])[0]
+                  for i in range(ac):
+                      a = pos + 36 + 20*i
+                      nm = struct.unpack('<i', man[a+4:a+8])[0]
+                      if strs[nm] == 'targetSdkVersion':
+                          man[a+16:a+20] = struct.pack('<i', 23)
+                          man[a+8:a+12] = struct.pack('<i', -1)
+                          done = True
+              pos += sz
+          assert done
+          zout = zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED)
+          for it in zin.infolist():
+              n = it.filename
+              if n.startswith('META-INF/'): continue
+              if n == 'AndroidManifest.xml':
+                  zout.writestr(n, bytes(man))
+              elif n == 'lib/armeabi-v7a/libsamp.so':
+                  zout.write(lib, n)
+              else:
+                  zout.writestr(it, zin.read(n), compress_type=it.compress_type)
+          zout.close()
+          PY
           APK="$(ls *.apk | head -1)"
-          cp "$APK" GeoLifeRP.apk
-          mkdir -p pack/lib/armeabi-v7a
-          cp src/libs/armeabi-v7a/libsamp.so pack/lib/armeabi-v7a/
-          (cd pack && zip -q ../GeoLifeRP.apk lib/armeabi-v7a/libsamp.so)
-          zip -q -d GeoLifeRP.apk 'META-INF/*' || true
+          python3 patch.py "$APK" src/libs/armeabi-v7a/libsamp.so GeoLifeRP.apk
           BT="$(ls -d $ANDROID_HOME/build-tools/* | tail -1)"
           $BT/zipalign -f 4 GeoLifeRP.apk aligned.apk
           keytool -genkeypair -keystore my.jks -alias k -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=GeoLifeRP"
