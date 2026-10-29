@@ -1,4 +1,4 @@
-name: Build APK
+name: Build SAMP APK
 on: [workflow_dispatch, push]
 jobs:
   build:
@@ -9,16 +9,29 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Install NDK and CMake
+      - name: Get NDK r14b
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
-      - name: Unzip and build
+          wget -q https://dl.google.com/android/repository/android-ndk-r14b-linux-x86_64.zip
+          unzip -q android-ndk-r14b-linux-x86_64.zip
+      - name: Build libsamp.so
         run: |
-          unzip -q *.zip -d src
-          cd "$(dirname "$(find src -name gradlew | head -1)")"
-          chmod +x gradlew && ./gradlew assembleDebug
+          unzip -q SAMP-Master.zip -d src
+          cd src
+          ../android-ndk-r14b/ndk-build -j4
+          ls -la libs/armeabi-v7a/
+      - name: Replace lib in APK and sign
+        run: |
+          APK="$(ls *.apk | head -1)"
+          cp "$APK" GeoLifeRP.apk
+          mkdir -p pack/lib/armeabi-v7a
+          cp src/libs/armeabi-v7a/libsamp.so pack/lib/armeabi-v7a/
+          (cd pack && zip -q ../GeoLifeRP.apk lib/armeabi-v7a/libsamp.so)
+          zip -q -d GeoLifeRP.apk 'META-INF/*' || true
+          BT="$(ls -d $ANDROID_HOME/build-tools/* | tail -1)"
+          $BT/zipalign -f 4 GeoLifeRP.apk aligned.apk
+          keytool -genkeypair -keystore my.jks -alias k -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=GeoLifeRP"
+          $BT/apksigner sign --ks my.jks --ks-pass pass:123456 --out GeoLifeRP-signed.apk aligned.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: apk
-          path: "src/**/build/outputs/apk/debug/*.apk"
+          name: GeoLifeRP-apk
+          path: GeoLifeRP-signed.apk
