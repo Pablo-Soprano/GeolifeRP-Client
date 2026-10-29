@@ -18,6 +18,8 @@ jobs:
       - name: Build libsamp.so
         run: |
           unzip -q SAMP-Master.zip -d src
+          ln -s raknet src/jni/vendor/RakNet
+          ln -s checkfilehash.h src/jni/CheckFileHash.h
           cd src
           ../android-ndk-r14b/ndk-build -j4
           ls -la libs/armeabi-v7a/
